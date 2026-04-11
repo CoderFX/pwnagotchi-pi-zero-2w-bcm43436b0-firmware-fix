@@ -27,3 +27,7 @@ __pycache__/
 # Test scratch
 /test-output/
 /scratch/
+
+# Local-only: outbound announcements, draft messages
+DISCORD_ANNOUNCEMENT.md
+ANNOUNCEMENT_*.md
