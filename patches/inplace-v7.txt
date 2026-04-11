@@ -1,0 +1,58 @@
+# BCM43436B0 8-layer stability patch — v7
+# Source firmware: nexmon-patched brcmfmac43436-sdio.bin (414696 bytes)
+# Source SHA-256:  d23e3138716fffd3f4e1de861525d653ee7f52581db7dae3737277ae7298ba64
+# Target SHA-256:  a196d53d41feff34d874f67fdb4be681785ce1b71a7d5f72e572ca013cf87eb4
+#
+# Format: offset_hex | old_bytes_hex | new_bytes_hex | layer | description
+# - offset_hex:    absolute byte offset in the firmware file
+# - old_bytes_hex: bytes the patcher expects to find (asserted before write)
+# - new_bytes_hex: bytes the patcher writes
+# - layer:         which of the 8 published stability layers this belongs to
+#                  (see LAYERS.md for plain-English descriptions of each layer)
+# - description:   one-line plain-English purpose — no firmware-internal
+#                  symbol names, no memory addresses, no disassembly artifacts
+#
+# Notes on layer assignment:
+# - layer1a/1b/1c are the three single-byte watchdog threshold changes
+# - layer2 covers the fatal-error wrapper code AND the three redirects that
+#   route the existing fatal-error call sites through the wrapper
+# - layer3 covers the primary memory-fault recovery code AND the vector-table
+#   entry that routes memory faults to it
+# - layer4 covers the bounds-checked memory operation code AND the one
+#   redirect that routes existing unchecked calls through it
+# - layer5 covers the secondary memory-fault recovery code AND the pointer
+#   that registers it with the firmware's fault-reporting system
+# - layer6 is the group-key rotation disable
+# - layer7 covers the universal fault recovery code AND the vector-table
+#   entries that route remaining fault categories to it
+# - layer8 is the signal-strength averaging null check
+#
+0x00000C | 112000 | 9DC003 | layer3  | vector-table entry routed to layer 3 recovery
+0x000030 | 112000 | DBC903 | layer7  | vector-table entry routed to layer 7 recovery
+0x0113F4 | 05 | FF | layer1a | watchdog threshold A raised from 5 to 255
+0x011430 | 05 | FF | layer1b | watchdog threshold B raised from 5 to 255
+0x011460 | 0A | FF | layer1c | watchdog threshold C raised from 10 to 255
+0x01148A | 25 | 2A | layer2  | first fatal-error call site redirected to layer 2 wrapper
+0x01148C | BDDE | EBFD | layer2  | first fatal-error call site redirected to layer 2 wrapper (cont)
+0x019654 | 1D | 22 | layer2  | second fatal-error call site redirected to layer 2 wrapper
+0x019656 | D8DD | 06FD | layer2  | second fatal-error call site redirected to layer 2 wrapper (cont)
+0x019C18 | 1D | 22 | layer2  | third fatal-error call site redirected to layer 2 wrapper
+0x019C1A | F6DA | 24FA | layer2  | third fatal-error call site redirected to layer 2 wrapper (cont)
+0x0204C8 | 1A46C81890F972000133082B0244F8D1002AB8BF0732D20850B2704710B5836893F8 | 69B11A46C81890F972000133082B0244F8D1002AB8BF0732D20810B2704700207047 | layer8  | layer 8 signal-strength averaging null check
+0x03C064 | 0000 | DDF8 | layer2  | layer 2 fatal-error wrapper code
+0x03C067 | 000000000000000000000000000000000000000000 | C0ACF1050CBCF1020F0AD84CF2940CC0F2030CDCF8 | layer2  | layer 2 fatal-error wrapper code (cont)
+0x03C07E | 00000000 | 0130CCF8 | layer2  | layer 2 fatal-error wrapper code (cont)
+0x03C085 | 00000000000000000000000000 | 20704747F2092CC0F2830C6047 | layer2  | layer 2 fatal-error wrapper code (cont)
+0x03C09C | 000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 | EFF30880D0F8181044F2D412C0F28002914215D344F29422C0F2800291420FD244F28F21C0F28001C0F818104CF29801C0F20301D1F8 | layer3  | layer 3 primary memory-fault recovery code
+0x03C0D3 | 0000000000 | 200132C1F8 | layer3  | layer 3 primary memory-fault recovery code (cont)
+0x03C0D9 | 000000000000 | 20704742F211 | layer3  | layer 3 primary memory-fault recovery code (cont)
+0x03C0E0 | 0000 | C0F2 | layer3  | layer 3 primary memory-fault recovery code (cont)
+0x03C0E5 | 00 | 47 | layer3  | layer 3 primary memory-fault recovery code (cont)
+0x03C0E8 | 0000000000000000000000000000 | 4368DFF830C063450AD10830083A | layer4  | layer 4 bounds-checked memory operation
+0x03C0F7 | 0000000000000000000000000000000000 | 2A0EDD03780B7001300131013AF9D107E0 | layer4  | layer 4 bounds-checked memory operation (cont)
+0x03C109 | 0000000000000000000000000000000000 | 2A05DD0B78037001300131013AF9D17047 | layer4  | layer 4 bounds-checked memory operation (cont)
+0x03C11B | 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 | BFFECAADDE10B5416844F2D412C0F28002914212D344F29422C0F2800291420CD244F28F22C0F28002C0F86C204CF25813C0F203031C6801341C6010BD | layer5  | layer 5 secondary memory-fault recovery code
+0x03C9DA | 000000000000000000000000000000000000000000000000000000 | 08980538022806D80598069002480168013101607047704794C003 | layer7  | layer 7 universal fault recovery code
+0x03CB08 | 000000 | 21C103 | layer5  | layer 5 pointer registered with fault-reporting system
+0x04D056 | CDF73BFF | 002000BF | layer6  | layer 6 group-key rotation disable
+0x063132 | A1F34FF0 | D8F7D9FF | layer4  | redirect: layer 4 bounds-checked memory operation

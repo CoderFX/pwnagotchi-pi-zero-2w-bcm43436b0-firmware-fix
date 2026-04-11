@@ -1,0 +1,14 @@
+[Unit]
+Description=Fix WiFi on boot if SDIO init failed
+Before=pwnagotchi.service
+After=systemd-modules-load.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=60
+ExecStart=/usr/local/bin/oxigotchi-fix-ndev.sh
+
+[Install]
+WantedBy=multi-user.target

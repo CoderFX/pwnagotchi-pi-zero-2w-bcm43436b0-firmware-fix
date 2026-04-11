@@ -1,0 +1,16 @@
+[Unit]
+Description=WiFi monitor interface keepalive (brcmfmac SDIO bus)
+After=network.target
+Before=pwnagotchi.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/oxigotchi-wlan-keepalive wlan0mon 100
+Restart=always
+RestartSec=3
+Nice=10
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

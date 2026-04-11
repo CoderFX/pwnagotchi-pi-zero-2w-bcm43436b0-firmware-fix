@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "repo_version": "0.1.0",
+  "patches": [
+    {
+      "name": "v7",
+      "input_sha256":  "d23e3138716fffd3f4e1de861525d653ee7f52581db7dae3737277ae7298ba64",
+      "input_size":    414696,
+      "patch_file":    "patches/inplace-v7.txt",
+      "patch_sha256":  "4990f92fd00282e92bb6931ce3a3e4c017698e955070b01716d89566c4b10721",
+      "output_sha256": "a196d53d41feff34d874f67fdb4be681785ce1b71a7d5f72e572ca013cf87eb4",
+      "output_size":   414696,
+      "userspace": {
+        "aarch64_sha256": "2f79c708db3b49ded97f3e3ac11734c321ec31512e643e152eb119f2a81b148f",
+        "armhf_sha256":   "55b2c5559bacf689f9de36033d9faa53c9153bad981ab948f890ddb89f6b98f0"
+      },
+      "description": "BCM43436B0 8-layer stability patches on top of jayofelony nexmon-patched brcmfmac43436-sdio.bin"
+    }
+  ]
+}

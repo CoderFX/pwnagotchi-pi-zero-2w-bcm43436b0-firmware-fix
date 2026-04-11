@@ -1,0 +1,14 @@
+[Unit]
+Description=WiFi SDIO recovery (GPIO power cycle if wlan0 missing)
+After=systemd-modules-load.service
+Before=bettercap.service pwnagotchi.service oxigotchi-wlan-keepalive.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=60
+ExecStart=/usr/local/bin/oxigotchi-wifi-recovery.sh
+
+[Install]
+WantedBy=multi-user.target

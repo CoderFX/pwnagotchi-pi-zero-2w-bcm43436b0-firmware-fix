@@ -1,0 +1,29 @@
+# Editor and OS cruft
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Local build artifacts
+*.o
+*.obj
+*.a
+
+# Scratch / temp
+*.tmp
+*.bak
+*~
+.#*
+\#*#
+
+# Test scratch
+/test-output/
+/scratch/

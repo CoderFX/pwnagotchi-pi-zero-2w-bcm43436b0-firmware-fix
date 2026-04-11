@@ -1,0 +1,14 @@
+[Unit]
+Description=WiFi SDIO watchdog (runtime recovery)
+After=oxigotchi-wifi-recovery.service oxigotchi-wlan-keepalive.service
+Wants=oxigotchi-wlan-keepalive.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 30
+ExecStart=/usr/local/bin/oxigotchi-wifi-watchdog.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

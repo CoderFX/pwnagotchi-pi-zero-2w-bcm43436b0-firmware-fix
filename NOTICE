@@ -1,0 +1,42 @@
+This repository contains zero bytes of Broadcom or nexmon firmware. The patch
+table in patches/inplace-v7.txt describes byte-level modifications applied at
+install time to a firmware file already present on the user's system. The
+installer refuses to run unless the on-disk firmware matches a SHA-256 listed
+in patches/manifest.json.
+
+This stability patch is layered on top of monitor-mode patches provided by
+nexmon (https://github.com/seemoo-lab/nexmon, GPLv3). nexmon is not
+redistributed by this repository. The supported input firmware is the
+nexmon-patched brcmfmac43436-sdio.bin shipped by jayofelony's pwnagotchi image
+(https://github.com/jayofelony/pwnagotchi). Other sources of nexmon-patched
+firmware may also work if their SHA-256 happens to match a manifest entry; we
+do not test or support any path other than the jayofelony image.
+
+Legal disclaimer: the legal status of distributing byte-level patch facts
+about a proprietary firmware without distributing the firmware itself is
+unsettled. We are not lawyers. We have not received legal advice. This
+repository is offered in good faith on the basis that (1) no firmware bytes
+are shipped, (2) the patch facts are necessary to interoperate with the
+hardware as documented in the public Raspberry Pi Foundation firmware
+package, and (3) the upstream nexmon project has distributed similar
+modifications publicly since 2015 without takedown. If a rights-holder asks
+us to take this repository down, we will comply.
+
+Tamper evidence: as of v1, this repository is unsigned. The installer
+hard-codes a MANIFEST_TRUSTED_HASHES table that pins every hash referenced
+by every manifest entry -- input firmware, output firmware, patch file, and
+both userspace binaries (aarch64 and armhf) -- and refuses to apply any
+manifest whose hashes do not match that table. The installer also recomputes
+the actual on-disk SHA-256 of the patch file and userspace binary it is
+about to use, before using them. This is a tripwire against single-file
+edits to the repo and against post-clone manipulation. It is NOT a
+substitute for cryptographic signing: an attacker who can write both
+manifest.json AND install.sh in the same commit defeats it. Real signing
+(signed git tags + tarball release process) is filed as a v1.1 release
+blocker.
+
+Hardware target: Raspberry Pi Zero 2 W only. The installer will refuse to run
+on any other model.
+
+This is a community contribution. It is not affiliated with Raspberry Pi Ltd.,
+Broadcom Inc., or the nexmon project.
