@@ -378,7 +378,9 @@ done < <(python3 -c "import json,sys; d=json.loads(sys.argv[1]); [print(s) for s
 EFFECTIVE_BINARY="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('binary') or '')" "${EFFECTIVE_FILES_JSON}")"
 EFFECTIVE_FIRMWARE="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('firmware') or '')" "${EFFECTIVE_FILES_JSON}")"
 
-# --- Step 2b: refuse the uninstall entirely if UNKNOWN ------------
+# --- Step 2b: refuse the uninstall entirely if UNKNOWN or if
+#     RESTORE was chosen but the backup file fails validation.
+#     All checks run BEFORE any destructive action (steps 3-4).
 case "${UNINSTALL_FIRMWARE_OUTCOME}" in
     UNKNOWN)
         cat >&2 <<EOF
@@ -395,6 +397,42 @@ Investigate manually, then either
       to forget the install record without touching the firmware.
 EOF
         exit 1
+        ;;
+    RESTORE)
+        # L1 fix: validate the backup file NOW, before any destructive
+        # action. If it fails, abort the entire uninstall.
+        [ -n "${EFFECTIVE_INPUT_SHA}" ] || die "RESTORE decided but input_sha is missing from effective state"
+        [ -n "${EFFECTIVE_BACKUP_PATH}" ] || die "RESTORE decided but backup_path is missing from effective state"
+        DERIVED_BACKUP="${BACKUP_DIR}/brcmfmac43436-sdio.${EFFECTIVE_INPUT_SHA:0:16}.bin"
+        if [ "${EFFECTIVE_BACKUP_PATH}" != "${DERIVED_BACKUP}" ]; then
+            die "backup_path '${EFFECTIVE_BACKUP_PATH}' does not match derived value '${DERIVED_BACKUP}'"
+        fi
+        if [ ! -e "${EFFECTIVE_BACKUP_PATH}" ]; then
+            die "backup file does not exist: ${EFFECTIVE_BACKUP_PATH}; refusing to uninstall"
+        fi
+        if [ -L "${EFFECTIVE_BACKUP_PATH}" ]; then
+            die "backup file is a symlink: ${EFFECTIVE_BACKUP_PATH}; refusing to uninstall"
+        fi
+        if [ ! -f "${EFFECTIVE_BACKUP_PATH}" ]; then
+            die "backup file is not a regular file: ${EFFECTIVE_BACKUP_PATH}; refusing to uninstall"
+        fi
+        PRECHECK_REAL_BACKUP="$(readlink -f "${EFFECTIVE_BACKUP_PATH}")"
+        if [ "${PRECHECK_REAL_BACKUP}" != "${EFFECTIVE_BACKUP_PATH}" ]; then
+            die "backup file realpath mismatch: ${PRECHECK_REAL_BACKUP} != ${EFFECTIVE_BACKUP_PATH}; refusing to uninstall"
+        fi
+        PRECHECK_REAL_PARENT="$(dirname "${EFFECTIVE_BACKUP_PATH}")"
+        if [ "${PRECHECK_REAL_PARENT}" != "${BACKUP_DIR}" ]; then
+            die "backup file parent dir is not ${BACKUP_DIR}: ${PRECHECK_REAL_PARENT}; refusing to uninstall"
+        fi
+        PRECHECK_BACKUP_SIZE="$(stat -c '%s' "${EFFECTIVE_BACKUP_PATH}")"
+        if [ "${PRECHECK_BACKUP_SIZE}" != "414696" ]; then
+            die "backup file size ${PRECHECK_BACKUP_SIZE} != 414696; refusing to uninstall"
+        fi
+        PRECHECK_BACKUP_SHA="$(sha256_of "${EFFECTIVE_BACKUP_PATH}")"
+        if [ "${PRECHECK_BACKUP_SHA}" != "${EFFECTIVE_INPUT_SHA}" ]; then
+            die "backup file corrupted: sha ${PRECHECK_BACKUP_SHA} != recorded input ${EFFECTIVE_INPUT_SHA}; refusing to uninstall"
+        fi
+        log "backup file pre-check passed: ${EFFECTIVE_BACKUP_PATH}"
         ;;
 esac
 
@@ -445,10 +483,39 @@ fi
 # 4c/d/e/f: hardcoded stale-temp sweep
 rm -f "${KNOWN_BINARY}.new" 2>/dev/null || true
 rm -f "${KNOWN_FIRMWARE}.new" 2>/dev/null || true
+rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
 rm -f "${STATE_PREV}.new" 2>/dev/null || true
 if [ -d "${BACKUP_DIR}" ]; then
     rm -f "${BACKUP_DIR}"/*.new 2>/dev/null || true
 fi
+
+# 4g: defense-in-depth sweep — catch any KNOWN items that a partial/corrupted
+# state file list may have missed, so uninstall never leaves artifacts behind.
+for unit in "${KNOWN_SERVICES[@]}"; do
+    unit_path="/etc/systemd/system/${unit}"
+    if [ -f "${unit_path}" ]; then
+        if systemctl is-active --quiet "${unit}" 2>/dev/null; then
+            systemctl stop "${unit}" 2>/dev/null || true
+        fi
+        if systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
+            systemctl disable "${unit}" 2>/dev/null || true
+        fi
+        systemctl reset-failed "${unit}" 2>/dev/null || true
+        rm -f "${unit_path}"
+        log "sweep: removed leftover unit ${unit}"
+    fi
+done
+for sp in "${KNOWN_SCRIPTS[@]}"; do
+    if [ -f "${sp}" ]; then
+        rm -f "${sp}"
+        log "sweep: removed leftover script ${sp}"
+    fi
+done
+if [ -f "${KNOWN_BINARY}" ]; then
+    rm -f "${KNOWN_BINARY}"
+    log "sweep: removed leftover binary ${KNOWN_BINARY}"
+fi
+systemctl daemon-reload 2>/dev/null || true
 
 # ------------------------------------------------------------------
 # Step 5: firmware restore (using UNINSTALL_FIRMWARE_OUTCOME from 2b)
@@ -507,14 +574,20 @@ case "${UNINSTALL_FIRMWARE_OUTCOME}" in
         modprobe -r brcmfmac 2>/dev/null || true
         sleep 1
         modprobe brcmfmac 2>/dev/null || true
-        for i in $(seq 1 15); do
+        WLAN0_RETURNED=0
+        for _i in $(seq 1 15); do
             if [ -e /sys/class/net/wlan0 ]; then
+                WLAN0_RETURNED=1
                 break
             fi
             sleep 1
         done
         DID_RESTORE=1
-        log "firmware restored"
+        if [ "${WLAN0_RETURNED}" -eq 1 ]; then
+            log "firmware restored; wlan0 is present"
+        else
+            log "WARNING: firmware restored on disk but wlan0 did not reappear within 15s; a reboot is strongly recommended"
+        fi
         ;;
     *)
         die "internal error: unknown UNINSTALL_FIRMWARE_OUTCOME=${UNINSTALL_FIRMWARE_OUTCOME}"

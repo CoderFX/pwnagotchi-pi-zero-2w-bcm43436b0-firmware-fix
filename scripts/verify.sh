@@ -124,6 +124,24 @@ fi
 # install time and doesn't run until next boot. verify.sh therefore only
 # hard-requires is-active for the keepalive. The watchdog and boot oneshots
 # are accepted in either "active" or "inactive" state.
+STATE_PHASE="$(python3 -c "import json; print(json.load(open('${STATE_FILE}')).get('phase') or '')" 2>/dev/null || echo "")"
+if [ -z "${SERVICES_JSON}" ]; then
+    if [ "${STATE_PHASE}" = "complete" ]; then
+        fail "state.files.services is empty but phase is 'complete'; install record is corrupted"
+    else
+        warn "state.files.services is empty (phase='${STATE_PHASE}')"
+    fi
+elif [ "${STATE_PHASE}" = "complete" ]; then
+    # A complete install must list all four expected services.
+    EXPECTED_SERVICE_COUNT=4
+    ACTUAL_SERVICE_COUNT=0
+    for _s in ${SERVICES_JSON}; do
+        ACTUAL_SERVICE_COUNT=$((ACTUAL_SERVICE_COUNT + 1))
+    done
+    if [ "${ACTUAL_SERVICE_COUNT}" -ne "${EXPECTED_SERVICE_COUNT}" ]; then
+        fail "state.files.services has ${ACTUAL_SERVICE_COUNT} entries but a complete install expects exactly ${EXPECTED_SERVICE_COUNT}; install record may be corrupted"
+    fi
+fi
 LONG_RUNNING="oxigotchi-wlan-keepalive.service"
 for unit in ${SERVICES_JSON}; do
     unit_path="/etc/systemd/system/${unit}"

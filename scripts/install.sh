@@ -63,6 +63,7 @@ BACKUP_DIR="${STATE_DIR}/backups"
 # at the end (or on failure).
 PWNAGOTCHI_WAS_RUNNING=0
 BETTERCAP_WAS_RUNNING=0
+STOPPED_OXIGOTCHI_UNITS=()
 
 # Populated as we make decisions.
 TARGET_ARCH=""              # "aarch64" | "armhf"
@@ -137,11 +138,14 @@ else:
 " "$1" "$2" "$3"
 }
 
-fsync_file() {
+sync_file() {
+    # Flush the filesystem containing this file to stable storage (syncfs).
+    # This is at least as strong as fsync(2) on a single file.
     sync -f "$1"
 }
 
-fsync_dir() {
+sync_dir() {
+    # Flush directory metadata to stable storage (sync on a directory path).
     sync "$1"
 }
 
@@ -221,8 +225,8 @@ except Exception:
     log "rollback: restoring firmware from ${backup}"
     cp "${backup}" "${KNOWN_FIRMWARE}.new"
     mv "${KNOWN_FIRMWARE}.new" "${KNOWN_FIRMWARE}"
-    fsync_file "${KNOWN_FIRMWARE}"
-    fsync_dir "$(dirname "${KNOWN_FIRMWARE}")"
+    sync_file "${KNOWN_FIRMWARE}"
+    sync_dir "$(dirname "${KNOWN_FIRMWARE}")"
     modprobe -r brcmfmac 2>/dev/null || true
     sleep 1
     modprobe brcmfmac 2>/dev/null || true
@@ -230,7 +234,35 @@ except Exception:
     return 0
 }
 
+# Boot oneshots that should NOT be re-executed on failure rollback.
+# These are Type=oneshot with RemainAfterExit=yes; restarting them would
+# re-trigger GPIO recovery / driver reload logic during reinstall.
+ONESHOT_UNITS=(
+    "oxigotchi-wifi-recovery.service"
+    "oxigotchi-fix-ndev.service"
+)
+
+is_oneshot() {
+    local needle="$1"
+    local u
+    for u in "${ONESHOT_UNITS[@]}"; do
+        if [ "${u}" = "${needle}" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 restart_paused_services() {
+    # Restart any long-running oxigotchi-* units that were stopped for reinstall.
+    # Skip boot oneshots to avoid re-triggering recovery logic.
+    for unit in "${STOPPED_OXIGOTCHI_UNITS[@]}"; do
+        if is_oneshot "${unit}"; then
+            log "skipping restart of oneshot unit ${unit}"
+        else
+            systemctl start "${unit}" 2>/dev/null || true
+        fi
+    done
     if [ "${PWNAGOTCHI_WAS_RUNNING}" -eq 1 ]; then
         systemctl start pwnagotchi 2>/dev/null || true
     fi
@@ -242,6 +274,7 @@ restart_paused_services() {
 cleanup_temp_files() {
     rm -f "${KNOWN_FIRMWARE}.new" 2>/dev/null || true
     rm -f "${KNOWN_BINARY}.new" 2>/dev/null || true
+    rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
     rm -f "${STATE_DIR}/state.json.previous.new" 2>/dev/null || true
     rm -f "${BACKUP_DIR}"/*.new 2>/dev/null || true
 }
@@ -267,6 +300,20 @@ except Exception:
         rollback_firmware || log "rollback failed; the firmware may be in an inconsistent state"
     else
         log "firmware was not written this run; no firmware rollback needed"
+        # Restore state.json from the previous snapshot if available, so that
+        # a failed reinstall does not leave an in_progress state that wedges
+        # the next install attempt.
+        if [ -f "${STATE_PREV}" ]; then
+            cp "${STATE_PREV}" "${STATE_FILE}"
+            sync_file "${STATE_FILE}"
+            sync_dir "${STATE_DIR}"
+            log "restored state.json from state.json.previous"
+        else
+            # No previous snapshot (fresh install failure). Keep the
+            # in_progress state.json so uninstall.sh can find and clean
+            # any userspace artifacts that were already written.
+            log "state.json left as in_progress; run 'sudo ./scripts/uninstall.sh' to clean up, then retry"
+        fi
     fi
     restart_paused_services
     exit 1
@@ -414,6 +461,18 @@ if systemctl is-active --quiet bettercap 2>/dev/null; then
     log "stopped bettercap (was running)"
 fi
 
+# 5b2: on reinstall, stop any pre-existing oxigotchi-* units to prevent
+# them from racing the driver reload or interfering with file overwrites.
+if [ "${PRIOR_STATE}" = "complete" ]; then
+    for unit in "${KNOWN_SERVICES[@]}"; do
+        if systemctl is-active --quiet "${unit}" 2>/dev/null; then
+            systemctl stop "${unit}" 2>/dev/null || true
+            STOPPED_OXIGOTCHI_UNITS+=("${unit}")
+            log "stopped pre-existing ${unit} for reinstall"
+        fi
+    done
+fi
+
 # 5d: state + backups dirs
 mkdir -p "${STATE_DIR}"
 mkdir -p "${BACKUP_DIR}"
@@ -421,9 +480,10 @@ mkdir -p "${BACKUP_DIR}"
 # 5e: preserve prior state for re-install safety
 if [ "${PRIOR_STATE}" = "complete" ]; then
     cp "${STATE_FILE}" "${STATE_PREV}.new"
-    fsync_file "${STATE_PREV}.new"
+    sync_file "${STATE_PREV}.new"
     mv "${STATE_PREV}.new" "${STATE_PREV}"
-    fsync_dir "${STATE_DIR}"
+    sync_file "${STATE_PREV}"
+    sync_dir "${STATE_DIR}"
     log "snapshotted complete state.json to state.json.previous"
 fi
 
@@ -462,21 +522,36 @@ stub = {
     "installed_at": None,
     "files": prev_files,
 }
-with open(state_file, "w") as f:
+tmp_path = state_file + ".tmp"
+with open(tmp_path, "w") as f:
     json.dump(stub, f, indent=2, sort_keys=True)
     f.write("\n")
 PYEOF
 
-# 5g: fsync stub state
-fsync_file "${STATE_FILE}"
-fsync_dir "${STATE_DIR}"
+# 5g: atomic commit of stub state
+sync_file "${STATE_FILE}.tmp"
+mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+sync_file "${STATE_FILE}"
+sync_dir "${STATE_DIR}"
 log "stub state.json written (phase=in_progress)"
 
-# Helper: update one field in state.json and fsync it.
+# Atomically write state.json: write to .tmp, sync filesystem, rename, sync dir.
+write_state() {
+    local content="$1"
+    local tmp="${STATE_FILE}.tmp"
+    printf '%s\n' "$content" > "$tmp"
+    sync_file "$tmp"
+    mv "$tmp" "${STATE_FILE}"
+    sync_file "${STATE_FILE}"
+    sync_dir "${STATE_DIR}"
+}
+
+# Helper: update one field in state.json atomically (write-to-tmp, sync, rename, sync dir).
 state_set() {
     local key="$1"
     local value_py="$2"
-    python3 - "$STATE_FILE" "$key" "$value_py" <<'PYEOF'
+    local new_content
+    new_content="$(python3 - "$STATE_FILE" "$key" "$value_py" <<'PYEOF'
 import json, sys
 path = sys.argv[1]
 key = sys.argv[2]
@@ -494,18 +569,18 @@ if "." in key:
     d[parts[-1]] = value
 else:
     data[key] = value
-with open(path, "w") as f:
-    json.dump(data, f, indent=2, sort_keys=True)
-    f.write("\n")
+print(json.dumps(data, indent=2, sort_keys=True))
 PYEOF
-    fsync_file "${STATE_FILE}"
+)"
+    write_state "$new_content"
 }
 
 state_append_unique() {
     # Append a string to a list field in state.json unless it's already there.
     local key="$1"
     local value="$2"
-    python3 - "$STATE_FILE" "$key" "$value" <<'PYEOF'
+    local new_content
+    new_content="$(python3 - "$STATE_FILE" "$key" "$value" <<'PYEOF'
 import json, sys
 path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json.load(open(path))
@@ -519,11 +594,10 @@ else:
     lst = data.setdefault(key, [])
 if value not in lst:
     lst.append(value)
-with open(path, "w") as f:
-    json.dump(data, f, indent=2, sort_keys=True)
-    f.write("\n")
+print(json.dumps(data, indent=2, sort_keys=True))
 PYEOF
-    fsync_file "${STATE_FILE}"
+)"
+    write_state "$new_content"
 }
 
 # ------------------------------------------------------------------
@@ -575,7 +649,7 @@ Supported source: https://github.com/jayofelony/pwnagotchi
 Do NOT 'apt install --reinstall firmware-brcm80211' — that would restore
 the stock Broadcom firmware which this installer cannot patch either.
 EOF
-    exit 1
+    die "unsupported firmware (sha256: ${LIVE_FW_SHA})"
 fi
 
 log "selected manifest entry: ${SELECTED_ENTRY} (firmware path: ${FIRMWARE_PATH})"
@@ -627,8 +701,8 @@ else
             die "backup copy sha256 mismatch (${NEW_BACKUP_SHA} != ${SELECTED_INPUT_SHA}); probable in-flight corruption, aborting"
         fi
         mv "${BACKUP_PATH}.new" "${BACKUP_PATH}"
-        fsync_file "${BACKUP_PATH}"
-        fsync_dir "${BACKUP_DIR}"
+        sync_file "${BACKUP_PATH}"
+        sync_dir "${BACKUP_DIR}"
         log "backup created: ${BACKUP_PATH}"
     fi
     state_set "backup_path" "'${BACKUP_PATH}'"
@@ -703,8 +777,8 @@ PYEOF
 
     # 6j: atomic rename -- POINT OF NO RETURN
     mv "${KNOWN_FIRMWARE}.new" "${KNOWN_FIRMWARE}"
-    fsync_file "${KNOWN_FIRMWARE}"
-    fsync_dir "$(dirname "${KNOWN_FIRMWARE}")"
+    sync_file "${KNOWN_FIRMWARE}"
+    sync_dir "$(dirname "${KNOWN_FIRMWARE}")"
 
     # 6k: flip the flag
     state_set "firmware_written_this_run" "True"
@@ -768,8 +842,8 @@ fi
 
 # 7c4: atomic rename + 7c5: durability
 mv "${KNOWN_BINARY}.new" "${KNOWN_BINARY}"
-fsync_file "${KNOWN_BINARY}"
-fsync_dir "$(dirname "${KNOWN_BINARY}")"
+sync_file "${KNOWN_BINARY}"
+sync_dir "$(dirname "${KNOWN_BINARY}")"
 
 # 7d: ELF arch sanity check
 ARCH_SANE=1
@@ -803,22 +877,24 @@ else
     esac
 fi
 
-# 7f: compile-from-source fallback
+# 7f: compile-from-source fallback (compile to .new, then atomic rename)
 if [ "${NEEDS_FALLBACK}" -eq 1 ]; then
     log "falling back to compile-from-source"
     if ! command -v gcc >/dev/null 2>&1; then
         log "gcc not found; installing gcc + libc6-dev"
         apt-get install -y gcc libc6-dev || die "apt-get install gcc libc6-dev failed"
     fi
-    if ! gcc -O2 -static-pie -s -o "${KNOWN_BINARY}" "${USERSPACE_DIR}/wlan_keepalive.c"; then
+    if ! gcc -O2 -static-pie -s -o "${KNOWN_BINARY}.new" "${USERSPACE_DIR}/wlan_keepalive.c"; then
         # Retry without static-pie (some toolchains lack rcrt1.o)
-        if ! gcc -O2 -static -s -o "${KNOWN_BINARY}" "${USERSPACE_DIR}/wlan_keepalive.c"; then
+        if ! gcc -O2 -static -s -o "${KNOWN_BINARY}.new" "${USERSPACE_DIR}/wlan_keepalive.c"; then
+            rm -f "${KNOWN_BINARY}.new" 2>/dev/null || true
             die "compile-from-source failed; cannot install keepalive daemon"
         fi
     fi
-    chmod 0755 "${KNOWN_BINARY}"
-    fsync_file "${KNOWN_BINARY}"
-    fsync_dir "$(dirname "${KNOWN_BINARY}")"
+    chmod 0755 "${KNOWN_BINARY}.new"
+    mv "${KNOWN_BINARY}.new" "${KNOWN_BINARY}"
+    sync_file "${KNOWN_BINARY}"
+    sync_dir "$(dirname "${KNOWN_BINARY}")"
     BINARY_SOURCE="compiled-from-source"
     log "compiled wlan_keepalive from source"
 fi
@@ -883,20 +959,16 @@ for entry in "${SCRIPT_MAP[@]}"; do
     # 8a: pre-record dest in state.json BEFORE writing the file
     state_append_unique "files.scripts" "${dest}"
 
-    # 8b: strip any stray CRLFs
-    TMPSCRIPT="$(mktemp)"
-    sed 's/\r$//' "${src}" > "${TMPSCRIPT}"
+    # 8b: strip any stray CRLFs into a staging file
+    sed 's/\r$//' "${src}" > "${dest}.new"
+    chmod 0755 "${dest}.new"
 
-    # 8c: cp + chmod 0755 to the dest
-    cp "${TMPSCRIPT}" "${dest}"
-    chmod 0755 "${dest}"
-    rm -f "${TMPSCRIPT}"
-
-    # 8d: durability
-    fsync_file "${dest}"
+    # 8c: atomic rename + durability
+    mv "${dest}.new" "${dest}"
+    sync_file "${dest}"
     log "installed script: ${dest}"
 done
-fsync_dir "/usr/local/bin"
+sync_dir "/usr/local/bin"
 
 # ------------------------------------------------------------------
 # Step 9: services phase (install only, do NOT start)
@@ -948,16 +1020,17 @@ for unit in "${EXPECTED_UNITS[@]}"; do
     # 9a: pre-record the bare unit name in state.json BEFORE writing the file
     state_append_unique "files.services" "${unit}"
 
-    # 9b: cp
-    cp "${src}" "${dest}"
+    # 9b: atomic copy via temp + rename
+    cp "${src}" "${dest}.new"
+    mv "${dest}.new" "${dest}"
 
     # 9c: durability
-    fsync_file "${dest}"
+    sync_file "${dest}"
     log "installed unit: ${unit}"
 done
 
 # 9d: commit directory entries
-fsync_dir "/etc/systemd/system"
+sync_dir "/etc/systemd/system"
 
 # 9e: daemon reload
 systemctl daemon-reload
@@ -1024,7 +1097,6 @@ state_set "phase" "'complete'"
 state_set "installed_at" "'${INSTALLED_AT}'"
 state_set "repo_version" "'${REPO_VERSION}'"
 state_set "files.firmware" "'${KNOWN_FIRMWARE}'"
-fsync_file "${STATE_FILE}"
 
 # 11f: clean up the re-install snapshot if any
 rm -f "${STATE_PREV}" || true
