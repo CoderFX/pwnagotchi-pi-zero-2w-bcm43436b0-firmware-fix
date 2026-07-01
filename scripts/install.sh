@@ -899,10 +899,8 @@ if [ "${ARCH_SANE}" -ne 1 ]; then
     log "ELF arch sanity check failed: ${FILE_OUT}"
     NEEDS_FALLBACK=1
 else
-    set +e
-    timeout 1s "${KNOWN_BINARY}" __nonexistent_iface__ 100 >/dev/null 2>&1
-    SMOKE_RC=$?
-    set -e
+    SMOKE_RC=0
+    timeout 1s "${KNOWN_BINARY}" __nonexistent_iface__ 100 >/dev/null 2>&1 || SMOKE_RC=$?
     case "${SMOKE_RC}" in
         124) log "smoke test OK (timeout while waiting for iface, as expected)" ;;
         126|127)
