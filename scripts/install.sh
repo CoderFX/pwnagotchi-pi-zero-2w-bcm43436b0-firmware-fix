@@ -45,11 +45,6 @@ KNOWN_SCRIPTS=(
 KNOWN_BINARY="/usr/local/bin/oxigotchi-wlan-keepalive"
 KNOWN_FIRMWARE="/lib/firmware/brcm/brcmfmac43436-sdio.bin"
 
-# Board-specific symlink that the brcmfmac driver follows on Pi Zero 2W
-# when the chip reports as BCM43430/1 (not BCM43430B0).
-BOARD_SYMLINK="/lib/firmware/brcm/brcmfmac43430-sdio.raspberrypi,model-zero-2-w.bin"
-BOARD_SYMLINK_EXPECTED_TARGET="brcmfmac43436-sdio.bin"
-
 # Repo paths. Computed from the script's own location so the installer
 # is safe to invoke from any working directory.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -350,7 +345,21 @@ case "${MODEL}" in
 esac
 
 # ------------------------------------------------------------------
-# Step 3: detect userland architecture
+# Step 3: detect WiFi chip — BCM43430/1 does not need this fix
+# ------------------------------------------------------------------
+CHIP_ID="$(dmesg 2>/dev/null | grep -oP 'chip BCM\K[0-9]+/[0-9]+' | tail -1 || true)"
+if [ "${CHIP_ID}" = "43430/1" ]; then
+    cat <<EOF
+[install] detected chip BCM43430/1 — this fix is for BCM43436B0 only.
+
+BCM43430/1 does not suffer from the same WiFi crash bug and works
+flawlessly without firmware patching. No action needed.
+EOF
+    exit 0
+fi
+
+# ------------------------------------------------------------------
+# Step 4: detect userland architecture
 # ------------------------------------------------------------------
 DPKG_ARCH=""
 if command -v dpkg >/dev/null 2>&1; then
@@ -522,9 +531,6 @@ stub = {
     "firmware_written_this_run": False,
     "firmware_restorable_on_uninstall": False,
     "backup_path": None,
-    "symlink_fixed": False,
-    "symlink_path": None,
-    "symlink_original_target": None,
     "binary_sha256": None,
     "binary_source": None,
     "installed_at": None,
@@ -791,37 +797,6 @@ PYEOF
     # 6k: flip the flag
     state_set "firmware_written_this_run" "True"
     log "firmware patched in place"
-fi
-
-# ------------------------------------------------------------------
-# Step 6l: board-specific symlink fixup
-# ------------------------------------------------------------------
-# On some Pi Zero 2W boards, the chip reports as BCM43430/1 (not B0) and
-# the driver loads firmware via brcmfmac43430-sdio.raspberrypi,model-zero-2-w.bin.
-# If this symlink points to the stock Cypress firmware (brcmfmac43436s-sdio.bin
-# -> cyfmac43430-sdio.bin) instead of the nexmon firmware we just patched
-# (brcmfmac43436-sdio.bin), the patched firmware is never loaded.
-if [ -L "${BOARD_SYMLINK}" ]; then
-    CURRENT_SYMLINK_TARGET="$(readlink "${BOARD_SYMLINK}")"
-    if [ "${CURRENT_SYMLINK_TARGET}" != "${BOARD_SYMLINK_EXPECTED_TARGET}" ]; then
-        state_set "symlink_path" "'${BOARD_SYMLINK}'"
-        state_set "symlink_original_target" "'${CURRENT_SYMLINK_TARGET}'"
-        ln -sf "${BOARD_SYMLINK_EXPECTED_TARGET}" "${BOARD_SYMLINK}"
-        sync_dir "$(dirname "${BOARD_SYMLINK}")"
-        state_set "symlink_fixed" "True"
-        log "redirected board symlink: ${CURRENT_SYMLINK_TARGET} -> ${BOARD_SYMLINK_EXPECTED_TARGET}"
-    else
-        log "board symlink already correct: ${BOARD_SYMLINK} -> ${BOARD_SYMLINK_EXPECTED_TARGET}"
-    fi
-elif [ ! -e "${BOARD_SYMLINK}" ]; then
-    ln -sf "${BOARD_SYMLINK_EXPECTED_TARGET}" "${BOARD_SYMLINK}"
-    sync_dir "$(dirname "${BOARD_SYMLINK}")"
-    state_set "symlink_path" "'${BOARD_SYMLINK}'"
-    state_set "symlink_original_target" "''"
-    state_set "symlink_fixed" "True"
-    log "created board symlink: ${BOARD_SYMLINK} -> ${BOARD_SYMLINK_EXPECTED_TARGET}"
-else
-    log "board symlink path is not a symlink (regular file?): ${BOARD_SYMLINK}; skipping"
 fi
 
 # ------------------------------------------------------------------
