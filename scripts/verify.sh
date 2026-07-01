@@ -101,6 +101,22 @@ else
 fi
 
 # ------------------------------------------------------------------
+# SOFT CHECK: board-specific symlink points to patched firmware
+# ------------------------------------------------------------------
+BOARD_SYMLINK="/lib/firmware/brcm/brcmfmac43430-sdio.raspberrypi,model-zero-2-w.bin"
+BOARD_SYMLINK_EXPECTED="brcmfmac43436-sdio.bin"
+if [ -L "${BOARD_SYMLINK}" ]; then
+    ACTUAL_TARGET="$(readlink "${BOARD_SYMLINK}")"
+    if [ "${ACTUAL_TARGET}" = "${BOARD_SYMLINK_EXPECTED}" ]; then
+        pass "board symlink -> ${BOARD_SYMLINK_EXPECTED}"
+    else
+        warn "board symlink points to '${ACTUAL_TARGET}' instead of '${BOARD_SYMLINK_EXPECTED}'; chip may load wrong firmware"
+    fi
+elif [ ! -e "${BOARD_SYMLINK}" ]; then
+    warn "board symlink missing: ${BOARD_SYMLINK}"
+fi
+
+# ------------------------------------------------------------------
 # HARD CHECK 4: binary sha256 == state.binary_sha256
 # ------------------------------------------------------------------
 if [ -z "${BINARY_SHA}" ]; then

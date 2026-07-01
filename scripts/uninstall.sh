@@ -595,6 +595,46 @@ case "${UNINSTALL_FIRMWARE_OUTCOME}" in
 esac
 
 # ------------------------------------------------------------------
+# Step 5b: restore board-specific symlink if we changed it
+# ------------------------------------------------------------------
+SYMLINK_FIXED="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print('true' if d.get('symlink_fixed') else 'false')
+except Exception:
+    print('false')
+" "${STATE_FILE}" 2>/dev/null || echo "false")"
+
+if [ "${SYMLINK_FIXED}" = "true" ]; then
+    SYMLINK_PATH="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(d.get('symlink_path') or '')
+except Exception:
+    print('')
+" "${STATE_FILE}" 2>/dev/null || echo "")"
+    SYMLINK_ORIG="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(d.get('symlink_original_target') or '')
+except Exception:
+    print('')
+" "${STATE_FILE}" 2>/dev/null || echo "")"
+
+    if [ -n "${SYMLINK_PATH}" ] && [ -n "${SYMLINK_ORIG}" ]; then
+        ln -sf "${SYMLINK_ORIG}" "${SYMLINK_PATH}"
+        sync "$(dirname "${SYMLINK_PATH}")"
+        log "restored board symlink: ${SYMLINK_PATH} -> ${SYMLINK_ORIG}"
+    elif [ -n "${SYMLINK_PATH}" ] && [ -z "${SYMLINK_ORIG}" ]; then
+        rm -f "${SYMLINK_PATH}"
+        log "removed board symlink we created: ${SYMLINK_PATH}"
+    fi
+fi
+
+# ------------------------------------------------------------------
 # Step 6: state cleanup
 # ------------------------------------------------------------------
 rm -f "${STATE_FILE}" || true
