@@ -54,12 +54,27 @@ With this repo installed:
 - This repo does not install, configure, or manage pwnagotchi or AngryOxide
   themselves. You're expected to already have your attack tool of choice.
 
+## Check if you need this
+
+Not all Pi Zero 2 W boards have the same WiFi chip. Check yours first:
+
+```bash
+dmesg | grep -oP 'chip BCM\S+'
+```
+
+- **BCM43436B0** → you likely have the crash bug. This fix is for you.
+- **BCM43430/1** → your chip does not have this bug. No fix needed.
+
+The installer will also detect this automatically and exit if your chip
+doesn't need patching.
+
 ## Compatibility
 
 - **Hardware**: Raspberry Pi Zero 2 W only. The installer hard-refuses any
   other model (checked against `/proc/device-tree/model`).
-- **Chip**: BCM43436B0 only. The installer hard-refuses any firmware whose
-  SHA-256 is not listed in `patches/manifest.json`.
+- **Chip**: BCM43436B0 only. BCM43430/1 chips do not suffer from this crash
+  bug and the firmware patch is incompatible with them. The installer
+  detects the chip and exits cleanly if it's not BCM43436B0.
 - **OS**: Raspberry Pi OS bookworm (aarch64 or armhf userland). The
   installer auto-detects the userland arch via `dpkg --print-architecture`
   (with `uname -m` as fallback) and installs the matching prebuilt
